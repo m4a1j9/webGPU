@@ -12,4 +12,4 @@ async function main() {
   app.renderFirstFrame();
 }
 
-main()
+main();
