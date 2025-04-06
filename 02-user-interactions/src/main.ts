@@ -1,7 +1,11 @@
-import { App } from "./control/app";
+import './style.css';
+import { App } from './1-app/App';
 
-const canvas : HTMLCanvasElement = <HTMLCanvasElement> document.getElementById("canvas");
+const canvas: HTMLCanvasElement = <HTMLCanvasElement>document.getElementById('canvas');
 
-const app = new App(canvas);
-app.InitializeRenderer();
-app.run();
+async function main() {
+  const app = await App.create(canvas);
+  app.run();
+}
+
+main()
