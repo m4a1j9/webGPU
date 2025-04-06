@@ -6,11 +6,16 @@ export class App {
   canvas: HTMLCanvasElement;
   renderer: Renderer;
   isRunning: boolean;
+  setTimeoutId: NodeJS.Timeout | null = null;
+  gridStartState: Uint32Array<ArrayBuffer> = new Uint32Array(GRID_SIZE * GRID_SIZE);
+  coordinateCondition = 1024 / GRID_SIZE;
 
   private constructor(canvas: HTMLCanvasElement, renderer: Renderer) {
     this.canvas = canvas;
     this.renderer = renderer;
     this.isRunning = false;
+
+    this.canvas.onclick = this.clickHandler.bind(this);
   }
 
   static async create(canvas: HTMLCanvasElement): Promise<App> {
@@ -19,24 +24,44 @@ export class App {
   }
 
   run() {
+    if (this.isRunning) {
+      this.stop();
+
+      return;
+    }
+
     this.isRunning = true;
 
-    this.renderer.initialize().then(() => {
-      this._renderNext();
-    });
+    this.setTimeoutId = setInterval(this._updateGrid.bind(this, true), UPDATE_INTERVAL);
   }
 
   stop() {
     this.isRunning = false;
+    clearInterval(this.setTimeoutId ?? 0);
   }
 
-  private _renderNext() {
-    if (!this.isRunning) return;
+  clickHandler(e: MouseEvent) {
+    const rect = this.canvas.getBoundingClientRect();
+    
+    const relativeX = Math.floor((e.clientX - rect.left) / this.coordinateCondition);
+    const relativeY = Math.floor((rect.bottom - e.clientY) / this.coordinateCondition); // Flip Y-axis
 
-    setInterval(this.updateGrid.bind(this), UPDATE_INTERVAL);
+    const index = relativeX + relativeY * GRID_SIZE;
+
+    this.gridStartState[index] = this.gridStartState[index] ? 0 : 1;
+
+    this.renderer.updateGridState(this.gridStartState);
+
+    this._updateGrid.call(this);
   }
 
-  private updateGrid() {
+  renderFirstFrame() {
+    this.renderer.initialize(this.gridStartState).then(() => {
+      this._updateGrid.call(this);
+    });
+  }
+
+  private _updateGrid(stepNext = false) {
     if (
       !this.renderer.computePipelines.simulation ||
       !this.renderer.renderPipelines.cell ||
@@ -56,7 +81,12 @@ export class App {
 
     computePass.end();
 
-    store.addStep();
+    stepNext && store.addStep();
+
+    this.renderer.context.configure({
+      device: this.renderer.device,
+      format: this.renderer.canvasFormat,
+    });
 
     const pass = encoder.beginRenderPass({
       colorAttachments: [

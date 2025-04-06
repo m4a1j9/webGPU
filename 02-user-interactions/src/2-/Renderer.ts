@@ -7,7 +7,6 @@ import { BindGroupBuilder } from '../7-shared/BindGroupBuilder';
 import { GRID_SIZE, WORKGROUP_SIZE } from '../7-shared/consts/PRIMITIVES';
 import { ComputePipelineBuilder } from '../7-shared/ComputePipelineBuilder';
 import { ComputePipelineTypes } from '../6-models/ComputePipelineTypes';
-import { store } from '../5-store/store';
 import { BindGroups } from '../6-models/BindGroups';
 
 export class Renderer {
@@ -79,8 +78,10 @@ export class Renderer {
     return new Renderer(canvas, adapter, device, context, canvasFormat);
   }
 
-  async initialize() {
-    await this.createAssets();
+  async initialize(gridState: Uint32Array<ArrayBuffer>) {
+    // this._reset();
+
+    await this.createAssets(gridState);
 
     await this.makeBindGroupLayouts();
 
@@ -89,7 +90,38 @@ export class Renderer {
     await this.makePipelines();
   }
 
-  async createAssets() {
+  private _reset() {
+    this.cellVertices = null;
+
+    this.uniformBuffer = null;
+    this.vertexBuffer = null;
+    this.cellStateStorageA = null;
+    this.cellStateStorageB = null;
+
+    this.renderPipelines = {
+      cell: null,
+    };
+    this.computePipelines = {
+      simulation: null,
+    };
+
+    this.bindGroups = {
+      cellA: null,
+      cellB: null,
+    };
+    this.bindGroupLayouts = {
+      cell: null,
+    };
+  }
+
+  updateGridState(gridState: Uint32Array<ArrayBuffer>) {
+    if (!this.cellStateStorageA || !this.cellStateStorageB) return;
+
+    this.device.queue.writeBuffer(this.cellStateStorageA, 0, gridState);
+    this.device.queue.writeBuffer(this.cellStateStorageB, 0, gridState);
+  }
+
+  async createAssets(gridState: Uint32Array<ArrayBuffer>) {
     const uniformArray = new Float32Array([GRID_SIZE, GRID_SIZE]);
     this.uniformBuffer = this.device.createBuffer({
       label: 'Grid Uniforms',
@@ -116,7 +148,8 @@ export class Renderer {
     });
     this.device.queue.writeBuffer(this.vertexBuffer, 0, this.cellVertices);
 
-    const cellStateArray = new Uint32Array(GRID_SIZE * GRID_SIZE);
+    // const cellStateArray = new Uint32Array(GRID_SIZE * GRID_SIZE);
+    const cellStateArray = gridState;
 
     this.cellStateStorageA = this.device.createBuffer({
       label: 'Cell State A',
@@ -129,14 +162,10 @@ export class Renderer {
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
     });
 
-    for (let i = 0; i < cellStateArray.length; ++i) {
-      cellStateArray[i] = Math.random() > 0.6 ? 1 : 0;
-    }
+    // for (let i = 0; i < cellStateArray.length; ++i) {
+    //   cellStateArray[i] = Math.random() > 0.6 ? 1 : 0;
+    // }
     this.device.queue.writeBuffer(this.cellStateStorageA, 0, cellStateArray);
-
-    for (let i = 0; i < cellStateArray.length; i++) {
-      cellStateArray[i] = i % 2;
-    }
     this.device.queue.writeBuffer(this.cellStateStorageB, 0, cellStateArray);
   }
 
