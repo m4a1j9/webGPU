@@ -1,0 +1,6 @@
+export {
+  CANVAS_SIZE,
+  GRID_SIZE,
+  UPDATE_INTERVAL,
+  WORKGROUP_SIZE,
+} from "./PRIMITIVES";

@@ -1,0 +1,1 @@
+export { Life } from './Life';

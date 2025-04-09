@@ -20,7 +20,27 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true
+    "noUncheckedSideEffectImports": true,
+
+    "typeRoots": [
+      "./node_modules/@webgpu/types", 
+      "./node_modules/@types"
+    ],
+
+    "baseUrl": "./",
+    "paths": {
+      "@app/*": ["src/1-app/*"],
+      "@pages/*": ["src/2-pages/*"],
+      "@sections/*": ["src/3-sections/*"],
+      "@widgets/*": ["src/4-widgets/*"],
+      "@features/*": ["src/5-features/*"],
+      "@builders/*": ["src/5-5-builders/*"],
+      "@store": ["src/6-store/index.ts"],
+      "@entities/*": ["src/7-entities/*"],
+      "@shared/*": ["src/8-shared/*"],
+      "@base/*": ["src/9-base/*"]
+    }
+
   },
   "include": ["src"]
 }
