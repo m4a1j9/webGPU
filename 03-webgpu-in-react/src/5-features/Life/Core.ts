@@ -2,6 +2,11 @@ import { store } from '@store';
 import { CANVAS_SIZE, GRID_SIZE, UPDATE_INTERVAL, WORKGROUP_SIZE } from '@shared/consts';
 import { Renderer } from './Renderer';
 
+type HoverCoords = {
+  x: number;
+  y: number;
+};
+
 export class Core {
   canvas: HTMLCanvasElement;
   renderer: Renderer;
@@ -9,6 +14,8 @@ export class Core {
   setTimeoutId: NodeJS.Timeout | null = null;
   gridStartState: Uint32Array<ArrayBuffer> = new Uint32Array(GRID_SIZE * GRID_SIZE);
   coordinateCondition = CANVAS_SIZE / GRID_SIZE;
+
+  hoverCoords: HoverCoords | null = null;
 
   private constructor(canvas: HTMLCanvasElement, renderer: Renderer) {
     this.canvas = canvas;
@@ -69,13 +76,52 @@ export class Core {
     });
   }
 
+  onHover(hoverCoords: HoverCoords | null) {
+    if (this.isRunning) return;
+
+    this.hoverCoords = hoverCoords;
+
+    this._updateHover(hoverCoords ?? { x:   0, y: 0 });
+  }
+
+  private _updateHover(hoverPos: HoverCoords) {
+    if (!this.renderer.renderPipelines.hover || !this.renderer.cellVertices?.length) throw new Error();
+    if (!this.renderer.hoverVertices?.length) throw new Error();
+
+    if (!this.renderer.hoverPositionBuffer) throw new Error();
+
+    const pos = new Float32Array([hoverPos.x, hoverPos.y]);
+    this.renderer.device.queue.writeBuffer(this.renderer.hoverPositionBuffer, 0, pos);
+
+    const encoder = this.renderer.device.createCommandEncoder();
+
+    const pass = encoder.beginRenderPass({
+      label: 'Hover Render Pass',
+      colorAttachments: [
+        {
+          view: this.renderer.context.getCurrentTexture().createView(),
+          loadOp: 'load',
+          storeOp: 'store',
+        },
+      ],
+    });
+
+    pass.setPipeline(this.renderer.renderPipelines.hover);
+    pass.setBindGroup(0, this.renderer.bindGroups.hover);
+    pass.setVertexBuffer(0, this.renderer.hoverVertexBuffer);
+    pass.draw(this.renderer.hoverVertices.length / 2, 1);
+
+    pass.end();
+    this.renderer.device.queue.submit([encoder.finish()]);
+  }
+
   private _updateGrid(stepNext = false) {
     if (
       !this.renderer.computePipelines.simulation ||
       !this.renderer.renderPipelines.cell ||
       !this.renderer.cellVertices?.length
     )
-      return;
+      throw new Error();
 
     const encoder = this.renderer.device.createCommandEncoder();
 
@@ -91,11 +137,6 @@ export class Core {
 
     stepNext && store.addStep();
 
-    this.renderer.context.configure({
-      device: this.renderer.device,
-      format: this.renderer.canvasFormat,
-    });
-
     const pass = encoder.beginRenderPass({
       colorAttachments: [
         {
@@ -109,7 +150,7 @@ export class Core {
 
     pass.setPipeline(this.renderer.renderPipelines.cell);
     pass.setBindGroup(0, store.step % 2 ? this.renderer.bindGroups.cellA : this.renderer.bindGroups.cellB);
-    pass.setVertexBuffer(0, this.renderer.vertexBuffer);
+    pass.setVertexBuffer(0, this.renderer.cellVertexBuffer);
     pass.draw(this.renderer.cellVertices.length / 2, GRID_SIZE * GRID_SIZE);
 
     pass.end();

@@ -1,0 +1,1 @@
+export type RenderPipelineTypes = 'cell' | 'hover';

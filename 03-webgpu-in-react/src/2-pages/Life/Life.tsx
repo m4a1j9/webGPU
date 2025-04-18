@@ -1,6 +1,6 @@
 import { CANVAS_SIZE } from '@shared/consts';
 import { LifeContext } from '@shared/hooks';
-import { KeyboardEvent, KeyboardEventHandler, RefObject, useContext, useEffect, useState } from 'react';
+import { KeyboardEvent, KeyboardEventHandler, MouseEvent, RefObject, useContext, useEffect, useState } from 'react';
 
 type Props = {
   canvasRef: RefObject<HTMLCanvasElement | null>;
@@ -36,6 +36,15 @@ export const Life = (props: Props) => {
     }
   };
 
+  const mouseMovehandler = (e: MouseEvent<HTMLCanvasElement>) => {
+    if (!life.core) return;
+
+    life.core.onHover({
+      x: e.clientX,
+      y: e.clientY,
+    });
+  };
+
   useEffect(() => {
     if (!life.core) return;
 
@@ -46,7 +55,7 @@ export const Life = (props: Props) => {
 
   return (
     <section>
-      <canvas ref={canvasRef} width={CANVAS_SIZE} height={CANVAS_SIZE}></canvas>
+      <canvas ref={canvasRef} width={CANVAS_SIZE} height={CANVAS_SIZE} onMouseMove={mouseMovehandler}></canvas>
       {!isRunning && <button onClick={toggleSimulation}>start</button>}
       {isRunning && <button onClick={toggleSimulation}>pause</button>}
     </section>

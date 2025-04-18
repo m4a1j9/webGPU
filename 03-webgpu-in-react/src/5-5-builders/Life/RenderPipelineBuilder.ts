@@ -16,9 +16,10 @@ export class RenderPipelineBuilder {
     this.buffers.push(vertexBufferLayout);
   }
 
-  addRenderTarget(format: GPUTextureFormat) {
+  addRenderTarget(format: GPUTextureFormat, blend?: GPUBlendState) {
     const target: GPUColorTargetState = {
-      format: format,
+      format,
+      blend,
     };
 
     this.renderTargets.push(target);

@@ -1,8 +1,9 @@
-import cellShader from '@shared/assets/shaders/cellShaderModule.wgsl?raw';
-import simulationShaderRaw from '@shared/assets/shaders/simulationShaderModule.wgsl?raw';
-import { RenderPipelineTypes } from '@entities/Life/RenderPipelineTypes';
-import { ComputePipelineTypes } from '@entities/Life/ComputePipelineTypes';
-import { BindGroups } from '@entities/Life/BindGroups';
+import cellShader from '@shared/assets/shaders/life/cellShaderModule.wgsl?raw';
+import simulationShaderRaw from '@shared/assets/shaders/life/simulationShaderModule.wgsl?raw';
+import hoverShader from '@shared/assets/shaders/life/hoverShaderModule.wgsl?raw';
+import { RenderPipelineTypes } from '@entities/Life/models/RenderPipelineTypes';
+import { ComputePipelineTypes } from '@entities/Life/models/ComputePipelineTypes';
+import { BindGroups } from '@entities/Life/models/BindGroups';
 import { GRID_SIZE, WORKGROUP_SIZE } from '@shared/consts';
 import {
   BindGroupBuilder,
@@ -20,10 +21,13 @@ export class Renderer {
   canvasFormat: GPUTextureFormat;
 
   cellVertices: Float32Array<ArrayBuffer> | null = null;
+  hoverVertices: Float32Array<ArrayBuffer> | null = null;
 
   renderPipelines: Record<RenderPipelineTypes, GPURenderPipeline | null>;
-  uniformBuffer: GPUBuffer | null = null;
-  vertexBuffer: GPUBuffer | null = null;
+  gridBuffer: GPUBuffer | null = null;
+  cellVertexBuffer: GPUBuffer | null = null;
+  hoverVertexBuffer: GPUBuffer | null = null;
+  hoverPositionBuffer: GPUBuffer | null = null;
   cellStateStorageA: GPUBuffer | null = null;
   cellStateStorageB: GPUBuffer | null = null;
   readBuffer: GPUBuffer | null = null;
@@ -48,6 +52,7 @@ export class Renderer {
 
     this.renderPipelines = {
       cell: null,
+      hover: null,
     };
     this.computePipelines = {
       simulation: null,
@@ -56,9 +61,11 @@ export class Renderer {
     this.bindGroups = {
       cellA: null,
       cellB: null,
+      hover: null,
     };
     this.bindGroupLayouts = {
       cell: null,
+      hover: null,
     };
   }
 
@@ -106,14 +113,14 @@ export class Renderer {
       0,
       this.cellStateStorageA.size,
     );
-  
+
     const commandBuffer = encoder.finish();
     this.device.queue.submit([commandBuffer]);
-  
+
     await this.readBuffer.mapAsync(GPUMapMode.READ);
     const data = new Uint32Array(this.readBuffer.getMappedRange().slice(0));
     this.readBuffer.unmap();
-  
+
     return data;
   }
 
@@ -129,15 +136,18 @@ export class Renderer {
 
   private _reset() {
     this.cellVertices = null;
+    this.hoverVertices = null;
 
-    this.uniformBuffer = null;
-    this.vertexBuffer = null;
+    this.gridBuffer = null;
+    this.cellVertexBuffer = null;
+    this.hoverVertexBuffer = null;
     this.cellStateStorageA = null;
     this.cellStateStorageB = null;
     this.readBuffer = null;
 
     this.renderPipelines = {
       cell: null,
+      hover: null,
     };
     this.computePipelines = {
       simulation: null,
@@ -146,9 +156,11 @@ export class Renderer {
     this.bindGroups = {
       cellA: null,
       cellB: null,
+      hover: null,
     };
     this.bindGroupLayouts = {
       cell: null,
+      hover: null,
     };
   }
 
@@ -159,31 +171,30 @@ export class Renderer {
   }
 
   private async _createAssets(gridState: Uint32Array<ArrayBuffer>) {
-    const uniformArray = new Float32Array([GRID_SIZE, GRID_SIZE]);
-    this.uniformBuffer = this.device.createBuffer({
+    const grid = new Float32Array([GRID_SIZE, GRID_SIZE]);
+    this.gridBuffer = this.device.createBuffer({
       label: 'Grid Uniforms',
-      size: uniformArray.byteLength,
+      size: grid.byteLength,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
-    this.device.queue.writeBuffer(this.uniformBuffer, 0, uniformArray);
+    this.device.queue.writeBuffer(this.gridBuffer, 0, grid);
 
     // prettier-ignore
     this.cellVertices = new Float32Array([
-      // X,   Y,
-      -0.8, -0.8, // Triangle 1 (Blue)
+      -0.8, -0.8,
        0.8, -0.8,
        0.8,  0.8,
 
-      -0.8, -0.8, // Triangle 2 (Red)
+      -0.8, -0.8,
        0.8,  0.8,
       -0.8,  0.8,
     ]);
-    this.vertexBuffer = this.device.createBuffer({
+    this.cellVertexBuffer = this.device.createBuffer({
       label: 'Cell vertices',
       size: this.cellVertices.byteLength,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
-    this.device.queue.writeBuffer(this.vertexBuffer, 0, this.cellVertices);
+    this.device.queue.writeBuffer(this.cellVertexBuffer, 0, this.cellVertices);
 
     this.cellStateStorageA = this.device.createBuffer({
       label: 'Cell State A',
@@ -195,17 +206,40 @@ export class Renderer {
       size: gridState.byteLength,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
     });
-
     for (let i = 0; i < gridState.length; ++i) {
       gridState[i] = Math.random() > 0.6 ? 1 : 0;
     }
     this.device.queue.writeBuffer(this.cellStateStorageA, 0, gridState);
     this.device.queue.writeBuffer(this.cellStateStorageB, 0, gridState);
+
+    this.hoverPositionBuffer = this.device.createBuffer({
+      label: 'Hover Position',
+      size: 4 * 2,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    // prettier-ignore
+    this.hoverVertices = new Float32Array([
+      -0.9, -0.9,
+       0.9, -0.9,
+       0.9,  0.9,
+
+      -0.9, -0.9,
+       0.9,  0.9,
+      -0.9,  0.9,
+    ]);
+    this.hoverVertexBuffer = this.device.createBuffer({
+      label: 'Hover vertices',
+      size: this.hoverVertices.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+    this.device.queue.writeBuffer(this.hoverVertexBuffer, 0, this.hoverVertices);
   }
 
   private async _makeBindGroupLayouts() {
     var builder = new BindGroupLayoutBuilder(this.device);
 
+    // Grid uniform buffer
     builder.addLayoutEntry(GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE);
     builder.addLayoutEntry(
       GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
@@ -213,34 +247,43 @@ export class Renderer {
     );
     builder.addLayoutEntry(GPUShaderStage.COMPUTE, 'storage');
     this.bindGroupLayouts.cell = await builder.build('Cell Bind Group Layout');
+
+    // Hover uniform buffer
+    builder.addLayoutEntry(GPUShaderStage.VERTEX);
+    this.bindGroupLayouts.hover = await builder.build('Hover Bind Group Layout');
   }
 
   private async _makeBindGroups() {
-    if (!this.bindGroupLayouts.cell) return;
-    if (!this.uniformBuffer || !this.cellStateStorageA || !this.cellStateStorageB) return;
+    if (!this.bindGroupLayouts.cell) throw new Error();
+    if (!this.gridBuffer || !this.cellStateStorageA || !this.cellStateStorageB) throw new Error();
 
     var builder = new BindGroupBuilder(this.device);
 
-    builder.addEntry(this.uniformBuffer);
+    builder.addEntry(this.gridBuffer);
     builder.addEntry(this.cellStateStorageA);
     builder.addEntry(this.cellStateStorageB);
-    this.bindGroups.cellB = await builder.build('Cell renderer bind group A', this.bindGroupLayouts.cell);
+    this.bindGroups.cellB = await builder.build('Cell Renderer Bind Group A', this.bindGroupLayouts.cell);
 
-    builder.addEntry(this.uniformBuffer);
+    builder.addEntry(this.gridBuffer);
     builder.addEntry(this.cellStateStorageB);
     builder.addEntry(this.cellStateStorageA);
-    this.bindGroups.cellA = await builder.build('Cell renderer bind group B', this.bindGroupLayouts.cell);
+    this.bindGroups.cellA = await builder.build('Cell Renderer Bind Group B', this.bindGroupLayouts.cell);
+
+    if (!this.hoverPositionBuffer || !this.bindGroupLayouts.hover) throw new Error();
+
+    builder.addEntry(this.hoverPositionBuffer);
+    this.bindGroups.hover = await builder.build('Hover Bind Group', this.bindGroupLayouts.hover);
   }
 
   private async _makePipelines() {
-    if (!this.bindGroupLayouts.cell) return;
+    if (!this.bindGroupLayouts.cell) throw new Error();
 
     const renderPipelineBuilder = new RenderPipelineBuilder(this.device);
 
     renderPipelineBuilder.addBindGroupLayout(this.bindGroupLayouts.cell);
     renderPipelineBuilder.addRenderTarget(this.canvasFormat);
     renderPipelineBuilder.addVertexBufferDescription({
-      arrayStride: 8,
+      arrayStride: 4 * 2,
       attributes: [
         {
           format: 'float32x2',
@@ -256,7 +299,7 @@ export class Renderer {
 
     this.renderPipelines.cell = await renderPipelineBuilder.build(
       'Cell Pipeline Layout',
-      'Cell pipeline',
+      'Cell Pipeline',
       cellShaderModule,
     );
 
@@ -272,8 +315,69 @@ export class Renderer {
     });
     this.computePipelines.simulation = await computePipelineBuilder.build(
       'Simulation Pipeline Layout',
-      'Simulation pipeline',
+      'Simulation Pipeline',
       simulationShaderModule,
     );
+
+    if (!this.bindGroupLayouts.hover) throw new Error();
+
+    renderPipelineBuilder.addBindGroupLayout(this.bindGroupLayouts.hover);
+    renderPipelineBuilder.addRenderTarget(this.canvasFormat, {
+      color: {
+        operation: 'add',
+        srcFactor: 'one',
+        dstFactor: 'src'
+      },
+      alpha: {
+        operation: 'add',
+        srcFactor: 'one',
+        dstFactor: 'src'
+      },
+    });
+    renderPipelineBuilder.addVertexBufferDescription({
+      arrayStride: 4 * 2,
+      attributes: [
+        {
+          format: 'float32x2',
+          offset: 0,
+          shaderLocation: 0,
+        },
+      ],
+    });
+
+    const hoverShaderModule = this.device.createShaderModule({
+      label: 'Hover shader',
+      code: hoverShader,
+    });
+    this.renderPipelines.hover = await renderPipelineBuilder.build(
+      'Hover Pipeline Layout',
+      'Hover Pipeline',
+      hoverShaderModule,
+    );
+
+    this.device.pushErrorScope('validation');
+    this.device.popErrorScope().then(async error => {
+      if (error) {
+        const info = await hoverShaderModule.getCompilationInfo();
+   
+        // Split the code into lines
+        const lines = hoverShader.split('\n');
+   
+        // Sort the messages by line numbers in reverse order
+        // so that as we insert the messages they won't affect
+        // the line numbers.
+        const msgs = [...info.messages].sort((a, b) => b.lineNum - a.lineNum);
+   
+        // Insert the error messages between lines
+        for (const msg of msgs) {
+          lines.splice(msg.lineNum, 0,
+            `${''.padEnd(msg.linePos - 1)}${''.padEnd(msg.length, '^')}`,
+            msg.message,
+          );
+        }
+   
+        console.log(lines.join('\n'));
+      }
+    });
   }
 }
