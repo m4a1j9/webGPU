@@ -1,6 +1,7 @@
 import { store } from '@store';
 import { CANVAS_SIZE, GRID_SIZE, UPDATE_INTERVAL, WORKGROUP_SIZE } from '@shared/consts';
 import { Renderer } from './Renderer';
+import { MouseEvent } from 'react';
 
 type HoverCoords = {
   x: number;
@@ -21,8 +22,6 @@ export class Core {
     this.canvas = canvas;
     this.renderer = renderer;
     this.isRunning = false;
-
-    this.canvas.onclick = this.clickHandler.bind(this);
   }
 
   static async create(canvas: HTMLCanvasElement) {
@@ -32,17 +31,19 @@ export class Core {
 
   run() {
     if (this.isRunning) {
-      this.stop();
-
       return;
     }
 
     this.isRunning = true;
 
-    this.setTimeoutId = setInterval(this._updateGrid.bind(this, true), UPDATE_INTERVAL);
+    this.setTimeoutId = setInterval(this._simulationStep.bind(this, true), UPDATE_INTERVAL);
   }
 
   stop() {
+    if (!this.isRunning) {
+      return;
+    }
+
     this.isRunning = false;
     clearInterval(this.setTimeoutId ?? 0);
 
@@ -66,78 +67,72 @@ export class Core {
     this.gridStartState[index] = this.gridStartState[index] ? 0 : 1;
 
     this.renderer.updateGridState(this.gridStartState);
-
-    this._updateGrid.call(this);
   }
 
   renderFirstFrame() {
-    this.renderer.initialize(this.gridStartState).then(() => {
-      this._updateGrid.call(this);
-    });
+    this.renderer
+      .initialize(this.gridStartState)
+      .then(() => {
+        this._simulationStep.call(this);
+      })
+      .then(() => {
+        this._renderLoop.call(this);
+      });
   }
 
   onHover(hoverCoords: HoverCoords | null) {
-    if (this.isRunning) return;
+    if (hoverCoords === null) {
+      this.hoverCoords = hoverCoords;
+      return;
+    }
 
-    this.hoverCoords = hoverCoords;
+    this.hoverCoords = {} as HoverCoords;
 
-    this._updateHover(hoverCoords ?? { x:   0, y: 0 });
+    const rect = this.canvas.getBoundingClientRect();
+    const canvasX = hoverCoords.x - rect.left;
+    const canvasY = hoverCoords.y - rect.top;
+    this.hoverCoords.x = (canvasX / this.canvas.width) * 2 - 1;
+    this.hoverCoords.y = (canvasY / this.canvas.height) * -2 + 1;
   }
 
-  private _updateHover(hoverPos: HoverCoords) {
-    if (!this.renderer.renderPipelines.hover || !this.renderer.cellVertices?.length) throw new Error();
-    if (!this.renderer.hoverVertices?.length) throw new Error();
+  private _simulationStep(stepNext = false) {
+    if (!this.renderer.computePipelines.simulation) throw new Error();
 
-    if (!this.renderer.hoverPositionBuffer) throw new Error();
-
-    const pos = new Float32Array([hoverPos.x, hoverPos.y]);
-    this.renderer.device.queue.writeBuffer(this.renderer.hoverPositionBuffer, 0, pos);
-
-    const encoder = this.renderer.device.createCommandEncoder();
-
-    const pass = encoder.beginRenderPass({
-      label: 'Hover Render Pass',
-      colorAttachments: [
-        {
-          view: this.renderer.context.getCurrentTexture().createView(),
-          loadOp: 'load',
-          storeOp: 'store',
-        },
-      ],
+    const simulationEncoder = this.renderer.device.createCommandEncoder({
+      label: 'Simulation Encoder',
     });
 
-    pass.setPipeline(this.renderer.renderPipelines.hover);
-    pass.setBindGroup(0, this.renderer.bindGroups.hover);
-    pass.setVertexBuffer(0, this.renderer.hoverVertexBuffer);
-    pass.draw(this.renderer.hoverVertices.length / 2, 1);
+    const computePass = simulationEncoder.beginComputePass({
+      label: 'Game of Life Compute Pass',
+    });
+    computePass.setPipeline(this.renderer.computePipelines.simulation);
 
-    pass.end();
-    this.renderer.device.queue.submit([encoder.finish()]);
+    computePass.setBindGroup(0, store.step % 2 ? this.renderer.bindGroups.cellA : this.renderer.bindGroups.cellB);
+    const workgroupCount = Math.ceil(GRID_SIZE / WORKGROUP_SIZE);
+    computePass.dispatchWorkgroups(workgroupCount, workgroupCount);
+    computePass.end();
+
+    this.renderer.device.queue.submit([simulationEncoder.finish()]);
+
+    stepNext && store.addStep();
   }
 
-  private _updateGrid(stepNext = false) {
+  private _renderLoop() {
     if (
-      !this.renderer.computePipelines.simulation ||
       !this.renderer.renderPipelines.cell ||
-      !this.renderer.cellVertices?.length
+      !this.renderer.cellVertices?.length ||
+      !this.renderer.hoverUniformBuffer ||
+      !this.renderer.renderPipelines.hover ||
+      !this.renderer.hoverVertices
     )
       throw new Error();
 
-    const encoder = this.renderer.device.createCommandEncoder();
+    const renderEncoder = this.renderer.device.createCommandEncoder({
+      label: 'Render Encoder',
+    });
 
-    const computePass = encoder.beginComputePass();
-
-    computePass.setPipeline(this.renderer.computePipelines.simulation);
-    computePass.setBindGroup(0, store.step % 2 ? this.renderer.bindGroups.cellA : this.renderer.bindGroups.cellB);
-
-    const workgroupCount = Math.ceil(GRID_SIZE / WORKGROUP_SIZE);
-    computePass.dispatchWorkgroups(workgroupCount, workgroupCount);
-
-    computePass.end();
-
-    stepNext && store.addStep();
-
-    const pass = encoder.beginRenderPass({
+    const renderPass = renderEncoder.beginRenderPass({
+      label: 'Main Render Pass',
       colorAttachments: [
         {
           view: this.renderer.context.getCurrentTexture().createView(),
@@ -148,12 +143,28 @@ export class Core {
       ],
     });
 
-    pass.setPipeline(this.renderer.renderPipelines.cell);
-    pass.setBindGroup(0, store.step % 2 ? this.renderer.bindGroups.cellA : this.renderer.bindGroups.cellB);
-    pass.setVertexBuffer(0, this.renderer.cellVertexBuffer);
-    pass.draw(this.renderer.cellVertices.length / 2, GRID_SIZE * GRID_SIZE);
+    renderPass.setPipeline(this.renderer.renderPipelines.cell);
 
-    pass.end();
-    this.renderer.device.queue.submit([encoder.finish()]);
+    renderPass.setBindGroup(0, store.step % 2 ? this.renderer.bindGroups.cellA : this.renderer.bindGroups.cellB);
+    renderPass.setVertexBuffer(0, this.renderer.cellVertexBuffer);
+    renderPass.draw(this.renderer.cellVertices.length / 2, GRID_SIZE * GRID_SIZE);
+
+    if (this.hoverCoords) {
+      this.renderer.hoverUniformData[0] = this.hoverCoords.x;
+      this.renderer.hoverUniformData[1] = this.hoverCoords.y;
+      // Обновляем только X, Y
+      this.renderer.device.queue.writeBuffer(this.renderer.hoverUniformBuffer, 0, this.renderer.hoverUniformData);
+
+      renderPass.setPipeline(this.renderer.renderPipelines.hover);
+      renderPass.setBindGroup(0, this.renderer.bindGroups.hover);
+      renderPass.setVertexBuffer(0, this.renderer.hoverVertexBuffer);
+      renderPass.draw(this.renderer.hoverVertices.length / 2, 1);
+    }
+
+    renderPass.end();
+
+    this.renderer.device.queue.submit([renderEncoder.finish()]);
+
+    requestAnimationFrame(this._renderLoop.bind(this));
   }
 }

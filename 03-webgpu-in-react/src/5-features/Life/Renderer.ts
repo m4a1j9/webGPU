@@ -12,6 +12,7 @@ import {
   RenderPipelineBuilder,
 } from '@builders/Life';
 import { store } from '@store';
+import { HOVER_SQUARE_SIZE } from '@shared/consts/PRIMITIVES';
 
 export class Renderer {
   canvas: HTMLCanvasElement;
@@ -27,7 +28,7 @@ export class Renderer {
   gridBuffer: GPUBuffer | null = null;
   cellVertexBuffer: GPUBuffer | null = null;
   hoverVertexBuffer: GPUBuffer | null = null;
-  hoverPositionBuffer: GPUBuffer | null = null;
+  hoverUniformBuffer: GPUBuffer | null = null;
   cellStateStorageA: GPUBuffer | null = null;
   cellStateStorageB: GPUBuffer | null = null;
   readBuffer: GPUBuffer | null = null;
@@ -36,6 +37,8 @@ export class Renderer {
 
   bindGroups: Record<BindGroups, GPUBindGroup | null>;
   bindGroupLayouts: Record<RenderPipelineTypes, GPUBindGroupLayout | null>;
+
+  hoverUniformData = new Float32Array(3 * 2);
 
   private constructor(
     canvas: HTMLCanvasElement,
@@ -134,36 +137,6 @@ export class Renderer {
     });
   }
 
-  private _reset() {
-    this.cellVertices = null;
-    this.hoverVertices = null;
-
-    this.gridBuffer = null;
-    this.cellVertexBuffer = null;
-    this.hoverVertexBuffer = null;
-    this.cellStateStorageA = null;
-    this.cellStateStorageB = null;
-    this.readBuffer = null;
-
-    this.renderPipelines = {
-      cell: null,
-      hover: null,
-    };
-    this.computePipelines = {
-      simulation: null,
-    };
-
-    this.bindGroups = {
-      cellA: null,
-      cellB: null,
-      hover: null,
-    };
-    this.bindGroupLayouts = {
-      cell: null,
-      hover: null,
-    };
-  }
-
   updateGridState(gridState: Uint32Array<ArrayBuffer>) {
     if (!this.cellStateStorageA || !this.cellStateStorageB) return;
 
@@ -171,69 +144,8 @@ export class Renderer {
   }
 
   private async _createAssets(gridState: Uint32Array<ArrayBuffer>) {
-    const grid = new Float32Array([GRID_SIZE, GRID_SIZE]);
-    this.gridBuffer = this.device.createBuffer({
-      label: 'Grid Uniforms',
-      size: grid.byteLength,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-    this.device.queue.writeBuffer(this.gridBuffer, 0, grid);
-
-    // prettier-ignore
-    this.cellVertices = new Float32Array([
-      -0.8, -0.8,
-       0.8, -0.8,
-       0.8,  0.8,
-
-      -0.8, -0.8,
-       0.8,  0.8,
-      -0.8,  0.8,
-    ]);
-    this.cellVertexBuffer = this.device.createBuffer({
-      label: 'Cell vertices',
-      size: this.cellVertices.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
-    this.device.queue.writeBuffer(this.cellVertexBuffer, 0, this.cellVertices);
-
-    this.cellStateStorageA = this.device.createBuffer({
-      label: 'Cell State A',
-      size: gridState.byteLength,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-    });
-    this.cellStateStorageB = this.device.createBuffer({
-      label: 'Cell State B',
-      size: gridState.byteLength,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-    });
-    for (let i = 0; i < gridState.length; ++i) {
-      gridState[i] = Math.random() > 0.6 ? 1 : 0;
-    }
-    this.device.queue.writeBuffer(this.cellStateStorageA, 0, gridState);
-    this.device.queue.writeBuffer(this.cellStateStorageB, 0, gridState);
-
-    this.hoverPositionBuffer = this.device.createBuffer({
-      label: 'Hover Position',
-      size: 4 * 2,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
-    // prettier-ignore
-    this.hoverVertices = new Float32Array([
-      -0.9, -0.9,
-       0.9, -0.9,
-       0.9,  0.9,
-
-      -0.9, -0.9,
-       0.9,  0.9,
-      -0.9,  0.9,
-    ]);
-    this.hoverVertexBuffer = this.device.createBuffer({
-      label: 'Hover vertices',
-      size: this.hoverVertices.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
-    this.device.queue.writeBuffer(this.hoverVertexBuffer, 0, this.hoverVertices);
+    this._createSimulationAssetcs(gridState);
+    this._createHoverAssets();
   }
 
   private async _makeBindGroupLayouts() {
@@ -269,9 +181,9 @@ export class Renderer {
     builder.addEntry(this.cellStateStorageA);
     this.bindGroups.cellA = await builder.build('Cell Renderer Bind Group B', this.bindGroupLayouts.cell);
 
-    if (!this.hoverPositionBuffer || !this.bindGroupLayouts.hover) throw new Error();
+    if (!this.hoverUniformBuffer || !this.bindGroupLayouts.hover) throw new Error();
 
-    builder.addEntry(this.hoverPositionBuffer);
+    builder.addEntry(this.hoverUniformBuffer);
     this.bindGroups.hover = await builder.build('Hover Bind Group', this.bindGroupLayouts.hover);
   }
 
@@ -322,18 +234,7 @@ export class Renderer {
     if (!this.bindGroupLayouts.hover) throw new Error();
 
     renderPipelineBuilder.addBindGroupLayout(this.bindGroupLayouts.hover);
-    renderPipelineBuilder.addRenderTarget(this.canvasFormat, {
-      color: {
-        operation: 'add',
-        srcFactor: 'one',
-        dstFactor: 'src'
-      },
-      alpha: {
-        operation: 'add',
-        srcFactor: 'one',
-        dstFactor: 'src'
-      },
-    });
+    renderPipelineBuilder.addRenderTarget(this.canvasFormat);
     renderPipelineBuilder.addVertexBufferDescription({
       arrayStride: 4 * 2,
       attributes: [
@@ -354,30 +255,80 @@ export class Renderer {
       'Hover Pipeline',
       hoverShaderModule,
     );
+  }
 
-    this.device.pushErrorScope('validation');
-    this.device.popErrorScope().then(async error => {
-      if (error) {
-        const info = await hoverShaderModule.getCompilationInfo();
-   
-        // Split the code into lines
-        const lines = hoverShader.split('\n');
-   
-        // Sort the messages by line numbers in reverse order
-        // so that as we insert the messages they won't affect
-        // the line numbers.
-        const msgs = [...info.messages].sort((a, b) => b.lineNum - a.lineNum);
-   
-        // Insert the error messages between lines
-        for (const msg of msgs) {
-          lines.splice(msg.lineNum, 0,
-            `${''.padEnd(msg.linePos - 1)}${''.padEnd(msg.length, '^')}`,
-            msg.message,
-          );
-        }
-   
-        console.log(lines.join('\n'));
-      }
+  private _createSimulationAssetcs(gridState: Uint32Array<ArrayBuffer>) {
+    const grid = new Float32Array([GRID_SIZE, GRID_SIZE]);
+    this.gridBuffer = this.device.createBuffer({
+      label: 'Grid Uniforms',
+      size: grid.byteLength,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
+    this.device.queue.writeBuffer(this.gridBuffer, 0, grid);
+
+    // prettier-ignore
+    this.cellVertices = new Float32Array([
+      -0.8, -0.8,
+       0.8, -0.8,
+       0.8,  0.8,
+
+      -0.8, -0.8,
+       0.8,  0.8,
+      -0.8,  0.8,
+    ]);
+    this.cellVertexBuffer = this.device.createBuffer({
+      label: 'Cell vertices',
+      size: this.cellVertices.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+    this.device.queue.writeBuffer(this.cellVertexBuffer, 0, this.cellVertices);
+
+    this.cellStateStorageA = this.device.createBuffer({
+      label: 'Cell State A',
+      size: gridState.byteLength,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    });
+    this.cellStateStorageB = this.device.createBuffer({
+      label: 'Cell State B',
+      size: gridState.byteLength,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+    });
+    for (let i = 0; i < gridState.length; ++i) {
+      gridState[i] = Math.random() > 0.6 ? 1 : 0;
+    }
+    this.device.queue.writeBuffer(this.cellStateStorageA, 0, gridState);
+    this.device.queue.writeBuffer(this.cellStateStorageB, 0, gridState);
+  }
+
+  private _createHoverAssets() {
+    // pos.x, pos.y, size.x, size.y, gridSize.x, gridSize.y
+    this.hoverUniformData[2] = HOVER_SQUARE_SIZE;
+    this.hoverUniformData[3] = HOVER_SQUARE_SIZE;
+    this.hoverUniformData[4] = GRID_SIZE;
+    this.hoverUniformData[5] = GRID_SIZE;
+
+    this.hoverUniformBuffer = this.device.createBuffer({
+      label: 'Hover Uniforms',
+      size: this.hoverUniformData.byteLength,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    this.device.queue.writeBuffer(this.hoverUniformBuffer, 0, this.hoverUniformData)
+
+    // prettier-ignore
+    this.hoverVertices = new Float32Array([
+      -0.9, -0.9,
+       0.9, -0.9,
+       0.9,  0.9,
+
+      -0.9, -0.9,
+       0.9,  0.9,
+      -0.9,  0.9,
+    ]);
+    this.hoverVertexBuffer = this.device.createBuffer({
+      label: 'Hover square vertices',
+      size: this.hoverVertices.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+    this.device.queue.writeBuffer(this.hoverVertexBuffer, 0, this.hoverVertices);
   }
 }
